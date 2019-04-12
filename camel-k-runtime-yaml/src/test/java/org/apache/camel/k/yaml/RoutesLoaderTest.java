@@ -67,7 +67,7 @@ public class RoutesLoaderTest {
         builder.configure();
 
         List<RouteDefinition> routes = builder.getRouteCollection().getRoutes();
-        assertThat(routes).hasSize(1);
+        assertThat(routes).hasSize(2);
         assertThat(routes.get(0).getInputs().get(0).getEndpointUri()).isEqualTo("direct:start");
         assertThat(routes.get(0).getOutputs().get(0)).isInstanceOf(TransformDefinition.class);
     }

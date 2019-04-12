@@ -1,18 +1,28 @@
 ---
 route:
-    attr: {id: demo}
-    from:
-        attr: {uri: direct:start }
-    transform:
-        method:
-            attr: {ref: myBean, method: saySomething}
-    filter:
-        simple: ${body} contains 'foo'
-        choice:
-            when:
-                jsonpath: $.store.book[?(@.price > 10)]
-                to:
-                    attr: { uri: direct:a }
-            otherwise:
-                to:
-                    attr: { uri: direct:b }
+    - id: demo
+
+    - from: direct:start
+
+    - transform:
+    - method:
+        bean: myBean
+        method: saySomething
+
+    - filter:
+    - simple: ${body} contains 'foo'
+
+    - filter:
+    - simple: ${headers} contains 'bar'
+
+    - choice:
+    - when:
+    - jsonpath: $.store.book[?(@.price > 10)]
+    - to: direct:a
+    - otherwise:
+    - to: direct:b
+---
+route:
+    - id: demo2
+    - from: timer:test
+    - to: log

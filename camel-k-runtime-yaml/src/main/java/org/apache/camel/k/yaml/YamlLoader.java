@@ -16,49 +16,34 @@
  */
 package org.apache.camel.k.yaml;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.k.RoutesLoader;
 import org.apache.camel.k.Runtime;
 import org.apache.camel.k.Source;
 import org.apache.camel.k.support.URIResolver;
+import org.apache.camel.model.RouteDefinition;
 import org.apache.camel.model.RoutesDefinition;
 import org.apache.camel.model.rest.RestsDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
-import javax.xml.bind.UnmarshalException;
-import javax.xml.stream.XMLOutputFactory;
-import javax.xml.stream.XMLStreamException;
-import javax.xml.stream.XMLStreamWriter;
-import java.io.*;
+import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Collections;
-import java.util.LinkedHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class YamlLoader implements RoutesLoader {
-    private final ObjectMapper mapper;
     private static final Logger LOGGER = LoggerFactory.getLogger(YamlLoader.class);
-
-    private static final String ROOT_ELEMENT = "routes";
-    private static final String NAMESPACE_LABEL = "xmlns";
-    private static final String NAMESPACE_VALUE = "http://camel.apache.org/schema/spring";
-    private static final String ATTR_KEY = "attr";
+    private final Yaml yaml;
 
     public YamlLoader() {
-        YAMLFactory yamlFactory = new YAMLFactory()
-                .configure(YAMLGenerator.Feature.MINIMIZE_QUOTES, true)
-                .configure(YAMLGenerator.Feature.ALWAYS_QUOTE_NUMBERS_AS_STRINGS, true)
-                .configure(YAMLGenerator.Feature.USE_NATIVE_TYPE_ID, false);
-
-        this.mapper = new ObjectMapper(yamlFactory)
-                .setSerializationInclusion(JsonInclude.Include.NON_EMPTY)
-                .enable(SerializationFeature.INDENT_OUTPUT);
+        this.yaml = new Yaml(new SafeConstructor());
     }
 
     @Override
@@ -71,27 +56,23 @@ public class YamlLoader implements RoutesLoader {
         return new RouteBuilder() {
             @Override
             public void configure() throws Exception {
-                try (InputStream is = URIResolver.resolve(getContext(), source); InputStream xis = yamlToXml(is)) {
+                try (InputStream is = URIResolver.resolve(getContext(), source)) {
                     try {
-                        RoutesDefinition definition = getContext().loadRoutesDefinition(xis);
+                        RoutesDefinition definition = routesCreator(is);
                         LOGGER.debug("Loaded {} routes from {}", definition.getRoutes().size(), source);
                         setRouteCollection(definition);
-                    } catch (IllegalArgumentException e) {
-                        // ignore
-                    } catch (UnmarshalException e) {
+                    } catch (Exception e) {
                         LOGGER.debug("Unable to load RoutesDefinition: {}", e.getMessage());
                     }
                 }
 
-                try (InputStream is = URIResolver.resolve(getContext(), source); InputStream xis = yamlToXml(is)) {
+                try (InputStream is = URIResolver.resolve(getContext(), source)) {
                     try {
-                        RestsDefinition definition = getContext().loadRestsDefinition(xis);
+                        RestsDefinition definition = restsCreator(is);
                         LOGGER.debug("Loaded {} rests from {}", definition.getRests().size(), source);
 
                         setRestCollection(definition);
-                    } catch (IllegalArgumentException e) {
-                        // ignore
-                    } catch (UnmarshalException e) {
+                    } catch (Exception e) {
                         LOGGER.debug("Unable to load RestsDefinition: {}", e.getMessage());
                     }
                 }
@@ -99,54 +80,60 @@ public class YamlLoader implements RoutesLoader {
         };
     }
 
-    private InputStream yamlToXml(InputStream is) throws Exception {
-        String yaml = new String(toByteArray(is));
-        LinkedHashMap routeMap = mapper.readValue(yaml, LinkedHashMap.class);
-
-        XMLOutputFactory xmlOutputFactory = XMLOutputFactory.newFactory();
-        StringWriter out = new StringWriter();
-        XMLStreamWriter sw = xmlOutputFactory.createXMLStreamWriter(out);
-
-        sw.writeStartDocument();
-        sw.writeStartElement(ROOT_ELEMENT);
-        sw.writeAttribute(NAMESPACE_LABEL, NAMESPACE_VALUE);
-
-        writeElementMap(sw, routeMap);
-        sw.writeEndElement();
-        sw.writeEndDocument();
-
-        return new ByteArrayInputStream(out.toString().getBytes());
-    }
-
-    private void writeElementMap(XMLStreamWriter sw, LinkedHashMap<String, Object> map) throws XMLStreamException {
-        for (Map.Entry<String, Object> entry : map.entrySet()) {
-            if (entry.getKey().equals(ATTR_KEY) && entry.getValue() instanceof LinkedHashMap) {
-                writeAttributesMap(sw, (LinkedHashMap<String, Object>) entry.getValue());
-            } else if (entry.getValue() instanceof LinkedHashMap) {
-                sw.writeStartElement(entry.getKey());
-                writeElementMap(sw, (LinkedHashMap<String, Object>) entry.getValue());
-                sw.writeEndElement();
-            } else {
-                sw.writeStartElement(entry.getKey());
-                sw.writeCharacters(entry.getValue().toString());
-                sw.writeEndElement();
+    private RoutesDefinition routesCreator(InputStream is) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+        RoutesDefinition routes = new RoutesDefinition();
+        Iterable rs = yaml.loadAll(is);
+        for (Iterator iterator = rs.iterator(); iterator.hasNext(); ) {
+            Object o = iterator.next();
+            if (o instanceof Map){
+                LOGGER.debug("Creating route ....");
+                routes.getRoutes().add(routeCreator((Map) o));
             }
         }
+        return routes;
     }
 
-    private void writeAttributesMap(XMLStreamWriter sw, LinkedHashMap<String, Object> map) throws XMLStreamException {
-        for (Map.Entry<String, Object> entry : map.entrySet()) {
-            sw.writeAttribute(entry.getKey(), entry.getValue().toString());
+    private RouteDefinition routeCreator(Map<String, Object> map) throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+        RouteDefinition route = new RouteDefinition();
+        Object currentDef = route;
+        List routeList = (List) map.get("route");
+        for (Object def : routeList){
+            Map<String, Object> step = (Map<String, Object>) def;
+            String definition = step.keySet().iterator().next();
+            Object val = step.get(definition);
+            if (val instanceof Map){
+                Map<String, Object> args = (Map<String, Object>) step.get(definition);
+                Object[] values = args.values().toArray(new Object[0]);
+                Class[] classes = args.values().stream().map(o -> o.getClass()).collect(Collectors.toList()).toArray(new Class[0]);
+                LOGGER.debug("Multiple arg definition {} : {}", definition, args);
+                Method method = currentDef.getClass().getMethod(definition, classes);
+                currentDef = method.invoke(currentDef, values);
+            } else if (val instanceof String){
+                String arg = (String) step.get(definition);
+                LOGGER.debug("String arg definition {} : {}", definition, arg);
+                Method method = currentDef.getClass().getMethod(definition, String.class);
+                currentDef = method.invoke(currentDef, arg);
+            } else {
+                LOGGER.debug("No arg definition {}", definition);
+                Method method = currentDef.getClass().getMethod(definition);
+                currentDef = method.invoke(currentDef);
+            }
         }
+        LOGGER.debug(route.toString());
+        return route;
     }
 
-    private byte[] toByteArray(InputStream in) throws IOException {
-        ByteArrayOutputStream os = new ByteArrayOutputStream();
-        byte[] buffer = new byte[1024];
-        int len;
-        while ((len = in.read(buffer)) != -1) {
-            os.write(buffer, 0, len);
+    private RestsDefinition restsCreator(InputStream is) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+        RestsDefinition rests = new RestsDefinition();
+        Iterable rs = yaml.loadAll(is);
+        for (Iterator iterator = rs.iterator(); iterator.hasNext(); ) {
+            Object o = iterator.next();
+            if (o instanceof Map){
+                LOGGER.debug("Creating rest ....");
+                //TODO: implement rest creator
+//                rests.getRests().add(routeCreator((Map) o));
+            }
         }
-        return os.toByteArray();
+        return rests;
     }
 }
