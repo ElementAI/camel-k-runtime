@@ -27,6 +27,7 @@ import org.apache.camel.k.InMemoryRegistry;
 import org.apache.camel.k.support.RuntimeSupport;
 import org.apache.camel.model.RouteDefinition;
 import org.apache.camel.model.ToDefinition;
+import org.apache.camel.model.TransformDefinition;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,5 +51,24 @@ public class RoutesLoaderTest {
         assertThat(routes).hasSize(1);
         assertThat(routes.get(0).getInputs().get(0).getEndpointUri()).isEqualTo("timer:tick");
         assertThat(routes.get(0).getOutputs().get(0)).isInstanceOf(ToDefinition.class);
+    }
+
+    @Test
+    public void testLoadYaml() throws Exception {
+        CamelContext context = new DefaultCamelContext();
+        Source source = Source.create("classpath:routes.yaml");
+        RoutesLoader loader = RuntimeSupport.loaderFor(context, source);
+        RouteBuilder builder = loader.load(new InMemoryRegistry(), source);
+
+        assertThat(loader).isInstanceOf(YamlLoader.class);
+        assertThat(builder).isNotNull();
+
+        builder.setContext(context);
+        builder.configure();
+
+        List<RouteDefinition> routes = builder.getRouteCollection().getRoutes();
+        assertThat(routes).hasSize(1);
+        assertThat(routes.get(0).getInputs().get(0).getEndpointUri()).isEqualTo("direct:start");
+        assertThat(routes.get(0).getOutputs().get(0)).isInstanceOf(TransformDefinition.class);
     }
 }

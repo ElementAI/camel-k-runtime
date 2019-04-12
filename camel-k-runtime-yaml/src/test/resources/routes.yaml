@@ -1,0 +1,18 @@
+---
+route:
+    attr: {id: demo}
+    from:
+        attr: {uri: direct:start }
+    transform:
+        method:
+            attr: {ref: myBean, method: saySomething}
+    filter:
+        simple: ${body} contains 'foo'
+        choice:
+            when:
+                jsonpath: $.store.book[?(@.price > 10)]
+                to:
+                    attr: { uri: direct:a }
+            otherwise:
+                to:
+                    attr: { uri: direct:b }
